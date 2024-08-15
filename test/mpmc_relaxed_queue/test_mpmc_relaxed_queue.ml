@@ -8,9 +8,8 @@ let smoke_test (push, pop) () =
       "there should be space in the queue" (push queue i) true
   done;
   assert (not (push queue 0));
-  let ({ tail; head; _ } : 'a Relaxed_queue.t) = queue in
-  assert (Atomic.get tail = 4);
-  assert (Atomic.get head = 0);
+  assert (queue.tail = 4);
+  assert (queue.head = 0);
   (* dequeue 4 *)
   for i = 1 to 4 do
     Alcotest.(check (option int))
@@ -89,15 +88,14 @@ let run_test num_takers num_pushers () =
     in
     Sys.opaque_identity (List.map Domain.join (pushers @ takers))
   in
-  let ({ array; head; tail; _ } : 'a Relaxed_queue.t) = queue in
-  let head_val = Atomic.get head in
-  let tail_val = Atomic.get tail in
+  let head_val = queue.head in
+  let tail_val = queue.tail in
   Alcotest.(check int) "hd an tl match" head_val tail_val;
   Array.iter
     (fun item ->
       Alcotest.(check (option int))
         "ghost item in the queue!" None (Atomic.get item))
-    array
+    queue.array
 
 let smoke_test_spinning () =
   let queue = Relaxed_queue.create ~size_exponent:2 () in
@@ -106,9 +104,8 @@ let smoke_test_spinning () =
     Relaxed_queue.Spin.push queue i
   done;
   assert (not (Relaxed_queue.Not_lockfree.push queue 0));
-  let ({ tail; head; _ } : 'a Relaxed_queue.t) = queue in
-  assert (Atomic.get tail = 4);
-  assert (Atomic.get head = 0);
+  assert (queue.tail = 4);
+  assert (queue.head = 0);
   (* dequeue 4 *)
   for i = 1 to 4 do
     Alcotest.(check (option int))

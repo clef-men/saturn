@@ -17,8 +17,8 @@
 
 type 'a t = private {
   array : 'a Option.t Atomic.t Array.t;
-  head : int Atomic.t;
-  tail : int Atomic.t;
+  mutable head : int [@atomic];
+  mutable tail : int [@atomic];
   mask : int;
 }
 (** A queue of items of type ['a]. Implementation exposed for testing. *)

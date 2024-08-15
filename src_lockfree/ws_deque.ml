@@ -90,48 +90,48 @@ module M : S = struct
   let shrink_const = 3
 
   type 'a t = {
-    top : int Atomic.t;
-    bottom : int Atomic.t;
-    tab : 'a ref CArray.t Atomic.t;
+    mutable top : int [@atomic];
+    mutable bottom : int [@atomic];
+    mutable tab : 'a ref CArray.t [@atomic];
     mutable next_shrink : int;
   }
 
   let create () =
     {
-      top = Atomic.make 1;
-      bottom = Atomic.make 1;
-      tab = Atomic.make (CArray.create min_size (Obj.magic ()));
+      top = 1;
+      bottom = 1;
+      tab = CArray.create min_size (Obj.magic ());
       next_shrink = 0;
     }
 
   let set_next_shrink q =
-    let sz = CArray.size (Atomic.get q.tab) in
+    let sz = CArray.size q.tab in
     if sz <= min_size then q.next_shrink <- 0
     else q.next_shrink <- sz / shrink_const
 
   let grow q t b =
-    Atomic.set q.tab (CArray.grow (Atomic.get q.tab) t b);
+    q.tab <- CArray.grow q.tab t b;
     set_next_shrink q
 
   let size q =
-    let b = Atomic.get q.bottom in
-    let t = Atomic.get q.top in
+    let b = q.bottom in
+    let t = q.top in
     b - t
 
   let push q v =
     let v' = ref v in
-    let b = Atomic.get q.bottom in
-    let t = Atomic.get q.top in
-    let a = Atomic.get q.tab in
+    let b = q.bottom in
+    let t = q.top in
+    let a = q.tab in
     let size = b - t in
     let a =
       if size = CArray.size a then (
         grow q t b;
-        Atomic.get q.tab)
+        q.tab)
       else a
     in
     CArray.put a b v';
-    Atomic.set q.bottom (b + 1)
+    q.bottom <- b + 1
 
   let release ptr =
     let res = !ptr in
@@ -145,43 +145,43 @@ module M : S = struct
   let pop q =
     if size q = 0 then raise Exit
     else
-      let b = Atomic.get q.bottom - 1 in
-      Atomic.set q.bottom b;
-      let t = Atomic.get q.top in
-      let a = Atomic.get q.tab in
+      let b = q.bottom - 1 in
+      q.bottom <- b;
+      let t = q.top in
+      let a = q.tab in
       let size = b - t in
       if size < 0 then (
         (* empty queue *)
-        Atomic.set q.bottom (b + 1);
+        q.bottom <- b + 1;
         raise Exit)
       else
         let out = CArray.get a b in
         if b = t then
           (* single last element *)
-          if Atomic.compare_and_set q.top t (t + 1) then (
-            Atomic.set q.bottom (b + 1);
+          if Atomic.Loc.compare_and_set [%atomic.loc q.top] t (t + 1) then (
+            q.bottom <- b + 1;
             release out)
           else (
-            Atomic.set q.bottom (b + 1);
+            q.bottom <- b + 1;
             raise Exit)
         else (
           (* non-empty queue *)
           if q.next_shrink > size then (
-            Atomic.set q.tab (CArray.shrink a t b);
+            q.tab <- CArray.shrink a t b;
             set_next_shrink q);
           release out)
 
   let pop_opt q = try Some (pop q) with Exit -> None
 
   let rec steal backoff q =
-    let t = Atomic.get q.top in
-    let b = Atomic.get q.bottom in
+    let t = q.top in
+    let b = q.bottom in
     let size = b - t in
     if size <= 0 then raise Exit
     else
-      let a = Atomic.get q.tab in
+      let a = q.tab in
       let out = CArray.get a t in
-      if Atomic.compare_and_set q.top t (t + 1) then release out
+      if Atomic.Loc.compare_and_set [%atomic.loc q.top] t (t + 1) then release out
       else steal (Backoff.once backoff) q
 
   let steal q = steal Backoff.default q

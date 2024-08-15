@@ -28,9 +28,9 @@ type not_float = [ `Not_float of not_float ]
 
 type 'a t = {
   array : not_float Array.t;
-  tail : int Atomic.t;
+  mutable tail : int [@atomic];
   tail_cache : int ref;
-  head : int Atomic.t;
+  mutable head : int [@atomic];
   head_cache : int ref;
 }
 
@@ -41,11 +41,9 @@ let create ~size_exponent =
     invalid_arg "size_exponent out of range";
   let size = 1 lsl size_exponent in
   let array = Array.make size (Obj.magic ()) in
-  let tail = Atomic.make_contended 0 in
   let tail_cache = ref 0 |> Multicore_magic.copy_as_padded in
-  let head = Atomic.make_contended 0 in
   let head_cache = ref 0 |> Multicore_magic.copy_as_padded in
-  { array; tail; tail_cache; head; head_cache }
+  { array; tail=0; tail_cache; head=0; head_cache }
   |> Multicore_magic.copy_as_padded
 
 type _ mono = Unit : unit mono | Bool : bool mono
@@ -55,18 +53,18 @@ type _ mono = Unit : unit mono | Bool : bool mono
 
 let[@inline never] push_as (type r) t element (mono : r mono) : r =
   let size = Array.length t.array in
-  let tail = Atomic.fenceless_get t.tail in
+  let tail = t.tail in
   let head_cache = !(t.head_cache) in
   if
     head_cache == tail - size
     &&
-    let head = Atomic.get t.head in
+    let head = t.head in
     t.head_cache := head;
     head == head_cache
   then match mono with Unit -> raise_notrace Full | Bool -> false
   else begin
     Array.unsafe_set t.array (tail land (size - 1)) (Obj.magic element);
-    Atomic.incr t.tail;
+    ignore (Stdlib.Atomic.Loc.fetch_and_add [%atomic.loc t.tail] 1);
     match mono with Unit -> () | Bool -> true
   end
 
@@ -79,12 +77,12 @@ type ('a, _) poly = Option : ('a, 'a option) poly | Value : ('a, 'a) poly
 type op = Peek | Pop
 
 let[@inline never] pop_or_peek_as (type a r) t op (poly : (a, r) poly) : r =
-  let head = Atomic.fenceless_get t.head in
+  let head = t.head in
   let tail_cache = !(t.tail_cache) in
   if
     head == tail_cache
     &&
-    let tail = Atomic.get t.tail in
+    let tail = t.tail in
     t.tail_cache := tail;
     tail_cache == tail
   then match poly with Value -> raise_notrace Empty | Option -> None
@@ -95,7 +93,7 @@ let[@inline never] pop_or_peek_as (type a r) t op (poly : (a, r) poly) : r =
       match op with
       | Pop ->
           Array.unsafe_set t.array index (Obj.magic ());
-          Atomic.incr t.head
+          ignore (Stdlib.Atomic.Loc.fetch_and_add [%atomic.loc t.head] 1)
       | Peek -> ()
     end;
     match poly with Value -> v | Option -> Some v
@@ -106,6 +104,6 @@ let peek_exn t = pop_or_peek_as t Peek Value
 let peek_opt t = pop_or_peek_as t Peek Option
 
 let size t =
-  let tail = Atomic.get t.tail in
-  let head = Atomic.fenceless_get t.head in
+  let tail = t.tail in
+  let head = t.head in
   tail - head

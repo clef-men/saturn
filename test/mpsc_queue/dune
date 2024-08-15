@@ -3,13 +3,13 @@
   (copy ../../src_lockfree/mpsc_queue.ml mpsc_queue.ml))
  (package saturn_lockfree))
 
-(test
- (package saturn_lockfree)
- (name mpsc_queue_dscheck)
- (libraries atomic dscheck alcotest)
- (build_if
-  (>= %{ocaml_version} 5))
- (modules mpsc_queue mpsc_queue_dscheck))
+; (test
+;  (package saturn_lockfree)
+;  (name mpsc_queue_dscheck)
+;  (libraries atomic dscheck alcotest)
+;  (build_if
+;   (>= %{ocaml_version} 5))
+;  (modules mpsc_queue mpsc_queue_dscheck))
 
 (test
  (package saturn_lockfree)

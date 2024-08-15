@@ -21,25 +21,25 @@
 type 'a node = Nil | Next of 'a * 'a node Atomic.t
 
 type 'a t = {
-  head : 'a node Atomic.t Atomic.t;
-  tail : 'a node Atomic.t Atomic.t;
+  mutable head : 'a node Atomic.t [@atomic];
+  mutable tail : 'a node Atomic.t [@atomic];
 }
 
 let create () =
   let next = Atomic.make Nil in
-  { head = Atomic.make next; tail = Atomic.make next }
+  { head = next; tail = next }
 
-let is_empty { head; _ } = Atomic.get (Atomic.get head) == Nil
+let is_empty t = Atomic.get t.head == Nil
 
 exception Empty
 
-let pop_opt { head; _ } =
+let pop_opt t =
   let b = Backoff.default in
   let rec loop b =
-    let old_head = Atomic.get head in
+    let old_head = t.head in
     match Atomic.get old_head with
     | Nil -> None
-    | Next (value, next) when Atomic.compare_and_set head old_head next ->
+    | Next (value, next) when Atomic.Loc.compare_and_set [%atomic.loc t.head] old_head next ->
         Some value
     | _ ->
         let b = Backoff.once b in
@@ -47,35 +47,36 @@ let pop_opt { head; _ } =
   in
   loop b
 
-let pop { head; _ } =
+let pop t =
   let b = Backoff.default in
   let rec loop b =
-    let old_head = Atomic.get head in
+    let old_head = t.head in
     match Atomic.get old_head with
     | Nil -> raise Empty
-    | Next (value, next) when Atomic.compare_and_set head old_head next -> value
+    | Next (value, next) when Atomic.Loc.compare_and_set [%atomic.loc t.head] old_head next ->
+        value
     | _ ->
         let b = Backoff.once b in
         loop b
   in
   loop b
 
-let peek_opt { head; _ } =
-  let old_head = Atomic.get head in
+let peek_opt t =
+  let old_head = t.head in
   match Atomic.get old_head with Nil -> None | Next (value, _) -> Some value
 
-let peek { head; _ } =
-  let old_head = Atomic.get head in
+let peek t =
+  let old_head = t.head in
   match Atomic.get old_head with Nil -> raise Empty | Next (value, _) -> value
 
-let rec fix_tail tail new_tail =
-  let old_tail = Atomic.get tail in
+let rec fix_tail t new_tail =
+  let old_tail = t.tail in
   if
     Atomic.get new_tail == Nil
-    && not (Atomic.compare_and_set tail old_tail new_tail)
-  then fix_tail tail new_tail
+    && not (Atomic.Loc.compare_and_set [%atomic.loc t.tail] old_tail new_tail)
+  then fix_tail t new_tail
 
-let push { tail; _ } value =
+let push t value =
   let rec find_tail_and_enq curr_end node =
     if not (Atomic.compare_and_set curr_end Nil node) then
       match Atomic.get curr_end with
@@ -84,12 +85,12 @@ let push { tail; _ } value =
   in
   let new_tail = Atomic.make Nil in
   let newnode = Next (value, new_tail) in
-  let old_tail = Atomic.get tail in
+  let old_tail = t.tail in
   find_tail_and_enq old_tail newnode;
-  if not (Atomic.compare_and_set tail old_tail new_tail) then
-    fix_tail tail new_tail
+  if not (Atomic.Loc.compare_and_set [%atomic.loc t.tail] old_tail new_tail) then
+    fix_tail t new_tail
 
 type 'a cursor = 'a node
 
-let snapshot { head; _ } = Atomic.get (Atomic.get head)
+let snapshot t = Atomic.get t.head
 let next = function Nil -> None | Next (a, n) -> Some (a, Atomic.get n)

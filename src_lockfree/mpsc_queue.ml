@@ -10,7 +10,7 @@
 exception Closed
 
 module Node : sig
-  type 'a t = { next : 'a opt Atomic.t; mutable value : 'a }
+  type 'a t = { mutable next : 'a opt [@atomic]; mutable value : 'a }
   and +'a opt
 
   val make : next:'a opt -> 'a -> 'a t
@@ -27,7 +27,7 @@ end = struct
   (* https://github.com/ocaml/RFCs/pull/14 should remove the need for magic here *)
 
   type +'a opt (* special | 'a t *)
-  type 'a t = { next : 'a opt Atomic.t; mutable value : 'a }
+  type 'a t = { mutable next : 'a opt [@atomic]; mutable value : 'a }
   type special = Nothing | Closed
 
   let none : 'a. 'a opt = Obj.magic Nothing
@@ -39,10 +39,10 @@ end = struct
     else if opt == closed then raise Closed
     else some (Obj.magic opt : 'a t)
 
-  let make ~next value = { value; next = Atomic.make next }
+  let make ~next value = { value; next }
 end
 
-type 'a t = { tail : 'a Node.t Atomic.t; mutable head : 'a Node.t }
+type 'a t = { mutable tail : 'a Node.t [@atomic]; mutable head : 'a Node.t }
 (* [head] is the last node dequeued (or a dummy node, initially).
    [head.next] gives the real first node, if not [Node.none].
    If [tail.next] is [none] then it is the last node in the queue.
@@ -51,33 +51,33 @@ type 'a t = { tail : 'a Node.t Atomic.t; mutable head : 'a Node.t }
 let push t x =
   let node = Node.(make ~next:none) x in
   let rec aux () =
-    let p = Atomic.get t.tail in
+    let p = t.tail in
     (* While [p.next == none], [p] is the last node in the queue. *)
-    if Atomic.compare_and_set p.next Node.none (Node.some node) then
+  if Atomic.Loc.compare_and_set [%atomic.loc p.next] Node.none (Node.some node) then
       (* [node] has now been added to the queue (and possibly even consumed).
          Update [tail], unless someone else already did it for us. *)
-      ignore (Atomic.compare_and_set t.tail p node : bool)
+      ignore (Atomic.Loc.compare_and_set [%atomic.loc t.tail] p node : bool)
     else
       (* Someone else added a different node first ([p.next] is not [none]).
          Make [t.tail] more up-to-date, if it hasn't already changed, and try again. *)
-      Node.fold (Atomic.get p.next)
+      Node.fold p.next
         ~none:(fun () -> assert false)
         ~some:(fun p_next ->
-          ignore (Atomic.compare_and_set t.tail p p_next : bool);
+          ignore (Atomic.Loc.compare_and_set [%atomic.loc t.tail] p p_next : bool);
           aux ())
   in
   aux ()
 
 let rec push_head t x =
   let p = t.head in
-  let next = Atomic.get p.next in
+  let next = p.next in
   if next == Node.closed then raise Closed;
   let node = Node.make ~next x in
-  if Atomic.compare_and_set p.next next (Node.some node) then
+  if Atomic.Loc.compare_and_set [%atomic.loc p.next] next (Node.some node) then
     if
       (* We don't want to let [tail] get too far behind, so if the queue was empty, move it to the new node. *)
       next == Node.none
-    then ignore (Atomic.compare_and_set t.tail p node : bool)
+    then ignore (Atomic.Loc.compare_and_set [%atomic.loc t.tail] p node : bool)
     else
       ( (* If the queue wasn't empty, there's nothing to do.
            Either tail isn't at head or there is some [push] thread working to update it.
@@ -90,22 +90,22 @@ let rec push_head t x =
 
 let rec close (t : 'a t) =
   (* Mark the tail node as final. *)
-  let p = Atomic.get t.tail in
-  if not (Atomic.compare_and_set p.next Node.none Node.closed) then
+  let p = t.tail in
+  if not (Atomic.Loc.compare_and_set [%atomic.loc p.next] Node.none Node.closed) then
     (* CAS failed because [p] is no longer the tail (or is already closed). *)
-    Node.fold (Atomic.get p.next)
+    Node.fold p.next
       ~none:(fun () -> assert false)
         (* Can't switch from another state to [none] *)
       ~some:(fun p_next ->
         (* Make [tail] more up-to-date if it hasn't changed already *)
-        ignore (Atomic.compare_and_set t.tail p p_next : bool);
+        ignore (Atomic.Loc.compare_and_set [%atomic.loc t.tail] p p_next : bool);
         (* Retry *)
         close t)
 
 let pop_opt t =
   let p = t.head in
   (* [p] is the previously-popped item. *)
-  let node = Atomic.get p.next in
+  let node = p.next in
   Node.fold node
     ~none:(fun () -> None)
     ~some:(fun node ->
@@ -120,7 +120,7 @@ exception Empty
 let pop t =
   let p = t.head in
   (* [p] is the previously-popped item. *)
-  let node = Atomic.get p.next in
+  let node = p.next in
   Node.fold node
     ~none:(fun () -> raise Empty)
     ~some:(fun node ->
@@ -133,20 +133,20 @@ let pop t =
 let peek_opt t =
   let p = t.head in
   (* [p] is the previously-popped item. *)
-  let node = Atomic.get p.next in
+  let node = p.next in
   Node.fold node ~none:(fun () -> None) ~some:(fun node -> Some node.value)
 
 let peek t =
   let p = t.head in
   (* [p] is the previously-popped item. *)
-  let node = Atomic.get p.next in
+  let node = p.next in
   Node.fold node ~none:(fun () -> raise Empty) ~some:(fun node -> node.value)
 
 let is_empty t =
-  Node.fold (Atomic.get t.head.next)
+  Node.fold t.head.next
     ~none:(fun () -> true)
     ~some:(fun _ -> false)
 
 let create () =
-  let dummy = { Node.value = Obj.magic (); next = Atomic.make Node.none } in
-  { tail = Atomic.make dummy; head = dummy }
+  let dummy = { Node.value = Obj.magic (); next = Node.none } in
+  { tail = dummy; head = dummy }

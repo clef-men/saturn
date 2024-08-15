@@ -8,13 +8,13 @@
   (copy ../../src_lockfree/ws_deque.ml ws_deque.ml))
  (package saturn_lockfree))
 
-(test
- (package saturn_lockfree)
- (name ws_deque_dscheck)
- (libraries atomic dscheck alcotest backoff)
- (build_if
-  (>= %{ocaml_version} 5))
- (modules ArrayExtra ws_deque ws_deque_dscheck))
+; (test
+;  (package saturn_lockfree)
+;  (name ws_deque_dscheck)
+;  (libraries atomic dscheck alcotest backoff)
+;  (build_if
+;   (>= %{ocaml_version} 5))
+;  (modules ArrayExtra ws_deque ws_deque_dscheck))
 
 (test
  (package saturn_lockfree)

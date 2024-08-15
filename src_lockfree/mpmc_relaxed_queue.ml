@@ -97,8 +97,8 @@
 
 type 'a t = {
   array : 'a Option.t Atomic.t Array.t;
-  head : int Atomic.t;
-  tail : int Atomic.t;
+  mutable head : int [@atomic];
+  mutable tail : int [@atomic];
   mask : int;
 }
 
@@ -106,26 +106,24 @@ let create ~size_exponent () : 'a t =
   let size = 1 lsl size_exponent in
   let array = Array.init size (fun _ -> Atomic.make None) in
   let mask = size - 1 in
-  let head = Atomic.make 0 in
-  let tail = Atomic.make 0 in
-  { array; head; tail; mask }
+  { array; head=0; tail=0; mask }
 
 (* [ccas] A slightly nicer CAS. Tries without taking microarch lock first. Use on indices. *)
 let ccas cell seen v =
   if Atomic.get cell != seen then false else Atomic.compare_and_set cell seen v
 
-let push { array; tail; mask; _ } item =
-  let tail_val = Atomic.fetch_and_add tail 1 in
-  let index = tail_val land mask in
-  let cell = Array.get array index in
+let push t item =
+  let tail_val = Atomic.Loc.fetch_and_add [%atomic.loc t.tail] 1 in
+  let index = tail_val land t.mask in
+  let cell = Array.get t.array index in
   while not (ccas cell None (Some item)) do
     Domain.cpu_relax ()
   done
 
-let pop { array; head; mask; _ } =
-  let head_val = Atomic.fetch_and_add head 1 in
-  let index = head_val land mask in
-  let cell = Array.get array index in
+let pop t =
+  let head_val = Atomic.Loc.fetch_and_add [%atomic.loc t.head] 1 in
+  let index = head_val land t.mask in
+  let cell = Array.get t.array index in
   let item = ref (Atomic.get cell) in
   while Option.is_none !item || not (ccas cell !item None) do
     Domain.cpu_relax ();
