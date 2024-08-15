@@ -64,7 +64,7 @@ let push_as (type r) t element (mono : r mono) : r =
   then match mono with Unit -> raise_notrace Full | Bool -> false
   else begin
     Array.unsafe_set t.array (tail land (size - 1)) (Some element);
-    ignore (Atomic.Loc.fetch_and_add [%atomic.loc t.tail] 1);
+    Atomic.Loc.incr [%atomic.loc t.tail];
     match mono with Unit -> () | Bool -> true
   end
 
@@ -93,7 +93,7 @@ let pop_or_peek_as (type a r) (t : a t) op (poly : (a, r) poly) : r =
       match op with
       | Pop ->
           Array.unsafe_set t.array index None;
-          ignore (Atomic.Loc.fetch_and_add [%atomic.loc t.head] 1);
+          Atomic.Loc.incr [%atomic.loc t.head];
       | Peek -> ()
     end;
     match poly with Value -> Option.get v | Option -> v
